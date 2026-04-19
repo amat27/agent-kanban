@@ -5,6 +5,7 @@ import {
 	resolveWindowsComSpec,
 	shouldUseWindowsCmdLaunch,
 } from "../core/windows-cmd-launch";
+import { resolveBinaryOnPath } from "./command-discovery";
 
 export interface PtyExitEvent {
 	exitCode: number;
@@ -62,6 +63,15 @@ function terminatePtyProcess(ptyProcess: pty.IPty): void {
 	}
 }
 
+function isAbsoluteOrRelativePath(binary: string): boolean {
+	return /[\\/]/.test(binary);
+}
+
+function isCmdBinary(binary: string): boolean {
+	const normalized = binary.trim().toLowerCase();
+	return normalized === "cmd" || normalized === "cmd.exe";
+}
+
 export class PtySession {
 	private readonly ptyProcess: pty.IPty;
 	private interrupted = false;
@@ -88,8 +98,33 @@ export class PtySession {
 		const terminalName = env?.TERM?.trim() || process.env.TERM?.trim() || "xterm-256color";
 		const launchEnv: NodeJS.ProcessEnv = env ? { ...process.env, ...env } : process.env;
 		const useWindowsShellLaunch = shouldUseWindowsCmdLaunch(binary, process.platform, launchEnv);
-		const spawnBinary = useWindowsShellLaunch ? resolveWindowsComSpec(launchEnv) : binary;
+		let spawnBinary = useWindowsShellLaunch ? resolveWindowsComSpec(launchEnv) : binary;
 		const spawnArgs = useWindowsShellLaunch ? buildWindowsCmdArgsCommandLine(binary, normalizedArgs) : normalizedArgs;
+		// node-pty's Windows conpty backend does not perform PATH resolution on the
+		// executable name (unlike Node's child_process.spawn). Passing a bare command
+		// like "opencode" produces the cryptic `File not found:` error even when the
+		// binary is on PATH. Resolve to an absolute path here so direct .exe launches
+		// work the same as cmd.exe-mediated .cmd launches. Skip when the binary is
+		// already an absolute/relative path or is cmd itself (conpty already locates
+		// cmd via its own startup logic; resolving via PATH would be redundant churn).
+		if (
+			process.platform === "win32" &&
+			!useWindowsShellLaunch &&
+			!isAbsoluteOrRelativePath(binary) &&
+			!isCmdBinary(binary)
+		) {
+			// Try the merged launch environment first, then fall back to the Kanban
+			// process's own PATH. The two can diverge: callers sometimes hand us a
+			// scrubbed env (e.g. for hook isolation) that drops user-installed shim
+			// directories like Scoop's, even though Kanban itself was launched from
+			// a shell that has them on PATH. Leaving spawnBinary as the bare name in
+			// the unresolved case lets node-pty surface its own error, which the
+			// session manager already wraps into a user-facing failure message.
+			const resolved = resolveBinaryOnPath(binary, launchEnv) ?? resolveBinaryOnPath(binary, process.env);
+			if (resolved) {
+				spawnBinary = resolved;
+			}
+		}
 		const ptyOptions: pty.IPtyForkOptions = {
 			name: terminalName,
 			cwd,

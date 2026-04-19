@@ -126,12 +126,13 @@ describe("PtySession", () => {
 		expect(ptyMocks.spawn.mock.calls[0]?.[1]).toBe('/d /s /c "cline"');
 	});
 
-	it("launches bare executables directly on Windows when PATH resolves to .exe", () => {
+	it("launches bare executables via absolute path on Windows when PATH resolves to .exe", () => {
 		setPlatform("win32");
 		process.env.ComSpec = "C:\\Windows\\System32\\cmd.exe";
 		process.env.PATHEXT = ".com;.exe;.bat;.cmd";
 		const windowsBinDir = mkdtempSync(join(tmpdir(), "kanban-win-path-"));
-		writeFileSync(join(windowsBinDir, "codex.exe"), "");
+		const expectedBinary = join(windowsBinDir, "codex.exe");
+		writeFileSync(expectedBinary, "");
 		process.env.PATH = "";
 
 		const ptyProcess = createMockPtyProcess();
@@ -155,7 +156,9 @@ describe("PtySession", () => {
 		}
 
 		expect(ptyMocks.spawn).toHaveBeenCalledTimes(1);
-		expect(ptyMocks.spawn.mock.calls[0]?.[0]).toBe("codex");
+		// node-pty's Windows conpty backend does not resolve PATH for the executable,
+		// so PtySession is expected to hand it an absolute path it discovered itself.
+		expect(ptyMocks.spawn.mock.calls[0]?.[0]?.toLowerCase()).toBe(expectedBinary.toLowerCase());
 		expect(ptyMocks.spawn.mock.calls[0]?.[1]).toEqual(["--foo", "bar"]);
 	});
 
