@@ -44,35 +44,50 @@ function getWindowsExecutableCandidates(binary: string): string[] {
 // environment the Kanban process already has, instead of silently relying on hidden shell
 // side effects.
 export function isBinaryAvailableOnPath(binary: string): boolean {
+	return resolveBinaryOnPath(binary) !== null;
+}
+
+// Resolve a bare binary name to an absolute path by scanning PATH.
+// Returns the absolute path on success, or null if not found.
+//
+// This exists separately from `isBinaryAvailableOnPath` because some Windows
+// child-process launchers (notably node-pty's conpty backend) do not perform
+// PATH resolution on the executable name themselves: passing a bare "opencode"
+// fails with the cryptic `File not found:` error even when `where opencode`
+// finds it. Callers that spawn through such launchers must resolve the
+// absolute path first.
+export function resolveBinaryOnPath(binary: string, env: NodeJS.ProcessEnv = process.env): string | null {
 	const trimmed = binary.trim();
 	if (!trimmed) {
-		return false;
+		return null;
 	}
 	if (trimmed.includes("/") || trimmed.includes("\\")) {
-		return canAccessPath(trimmed);
+		return canAccessPath(trimmed) ? trimmed : null;
 	}
 
-	const pathEntries = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+	const pathEntries = (env.PATH ?? "").split(delimiter).filter(Boolean);
 	if (pathEntries.length === 0) {
-		return false;
+		return null;
 	}
 
 	if (process.platform === "win32") {
 		const candidates = getWindowsExecutableCandidates(trimmed);
 		for (const entry of pathEntries) {
 			for (const candidate of candidates) {
-				if (canAccessPath(join(entry, candidate))) {
-					return true;
+				const candidatePath = join(entry, candidate);
+				if (canAccessPath(candidatePath)) {
+					return candidatePath;
 				}
 			}
 		}
-		return false;
+		return null;
 	}
 
 	for (const entry of pathEntries) {
-		if (canAccessPath(join(entry, trimmed))) {
-			return true;
+		const candidatePath = join(entry, trimmed);
+		if (canAccessPath(candidatePath)) {
+			return candidatePath;
 		}
 	}
-	return false;
+	return null;
 }
